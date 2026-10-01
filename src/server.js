@@ -14,6 +14,19 @@ if (!SHARED_SECRET) {
 }
 
 const app = express();
+
+// Some MCP clients probe with an OPTIONS preflight, and a browser-hosted
+// client enforces CORS — allow it. The shared-secret check below still
+// protects the endpoint; this only controls who's allowed to *ask*.
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Mcp-Session-Id, Accept, Mcp-Protocol-Version');
+  res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
 app.use(express.json({ limit: '2mb' }));
 
 // Health check — useful for the hosting platform and for a quick manual check.
@@ -38,8 +51,18 @@ registerAllTools(server);
 const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
 await server.connect(transport);
 
+// Handle all three Streamable HTTP verbs on the same transport — some
+// clients probe with GET (open an SSE stream) or DELETE (end a session)
+// even in stateless mode, and an unhandled verb here can make a client
+// conclude the URL isn't a valid MCP server at all.
 app.post('/mcp', (req, res) => {
   transport.handleRequest(req, res, req.body);
+});
+app.get('/mcp', (req, res) => {
+  transport.handleRequest(req, res);
+});
+app.delete('/mcp', (req, res) => {
+  transport.handleRequest(req, res);
 });
 
 app.listen(PORT, () => {
