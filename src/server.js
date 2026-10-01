@@ -27,6 +27,25 @@ app.use((req, res, next) => {
   next();
 });
 
+// Temporary diagnostic logging — lets us see exactly what a connecting
+// client (e.g. Claude's custom connector) actually sends, since the
+// "Couldn't connect" error in Claude's UI gives no detail on its own.
+// Safe to remove once the connector is working reliably.
+app.use((req, res, next) => {
+  const hasAuthHeader = Boolean(req.headers.authorization);
+  const authLooksRight = req.headers.authorization === `Bearer ${SHARED_SECRET}`;
+  console.log(
+    `[req] ${req.method} ${req.originalUrl} ` +
+      `accept="${req.headers.accept || ''}" ` +
+      `content-type="${req.headers['content-type'] || ''}" ` +
+      `auth-header-present=${hasAuthHeader} auth-matches=${authLooksRight}`
+  );
+  res.on('finish', () => {
+    console.log(`[res] ${req.method} ${req.originalUrl} -> ${res.statusCode}`);
+  });
+  next();
+});
+
 app.use(express.json({ limit: '2mb' }));
 
 // Health check — useful for the hosting platform and for a quick manual check.
