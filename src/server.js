@@ -4,12 +4,35 @@ import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
 import { registerAllTools } from './tools.js';
 
 const PORT = process.env.PORT || 3000;
-const SHARED_SECRET = process.env.MCP_SHARED_SECRET;
 
-if (!SHARED_SECRET) {
+// MCP_SHARED_SECRETS holds one or more named secrets, e.g.
+//   brady:3f9a...,sarah:7c2d...
+// so each person gets their own key and can be revoked individually by
+// removing their "name:secret" pair from the env var and saving (Render
+// restarts automatically on an env var change). Falls back to the older
+// single-secret MCP_SHARED_SECRET var if present, for compatibility.
+const SHARED_SECRETS = parseSharedSecrets(process.env.MCP_SHARED_SECRETS);
+if (process.env.MCP_SHARED_SECRET) {
+  SHARED_SECRETS.set(process.env.MCP_SHARED_SECRET, 'default');
+}
+
+function parseSharedSecrets(raw) {
+  const map = new Map(); // secret -> name
+  if (!raw) return map;
+  for (const entry of raw.split(',')) {
+    const sep = entry.indexOf(':');
+    if (sep === -1) continue;
+    const name = entry.slice(0, sep).trim();
+    const secret = entry.slice(sep + 1).trim();
+    if (name && secret) map.set(secret, name);
+  }
+  return map;
+}
+
+if (SHARED_SECRETS.size === 0) {
   console.warn(
-    '[toa-mcp-wrapper] MCP_SHARED_SECRET is not set — the /mcp endpoint is open to anyone who finds the URL. ' +
-      'Set MCP_SHARED_SECRET before deploying for real use.'
+    '[toa-mcp-wrapper] No shared secrets configured (MCP_SHARED_SECRETS) — the /mcp endpoint is open to anyone who finds the URL. ' +
+      'Set MCP_SHARED_SECRETS before deploying for real use.'
   );
 }
 
@@ -34,12 +57,19 @@ app.get('/', (req, res) => {
   res.json({ ok: true, service: 'toa-mcp-wrapper' });
 });
 
-// Gate the MCP endpoint behind a shared secret. Give Claude's custom
-// connector the same value as an `Authorization: Bearer <secret>` request
-// header (Add custom connector -> No sign-in -> Request headers).
+// Gate the MCP endpoint behind one of the named shared secrets. Give each
+// person's Claude custom connector their own value as an
+// `Authorization: Bearer <their secret>` request header
+// (Add custom connector -> No sign-in -> Request headers).
 app.use('/mcp', (req, res, next) => {
-  if (!SHARED_SECRET) return next();
-  if (req.headers.authorization === `Bearer ${SHARED_SECRET}`) return next();
+  if (SHARED_SECRETS.size === 0) return next();
+  const auth = req.headers.authorization || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : null;
+  const name = token ? SHARED_SECRETS.get(token) : undefined;
+  if (name) {
+    req.connectorUser = name;
+    return next();
+  }
   res.status(401).json({ error: 'Unauthorized' });
 });
 
