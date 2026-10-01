@@ -1,0 +1,19 @@
+{
+  "name": "toa-mcp-wrapper",
+  "version": "1.0.0",
+  "description": "Remote MCP server that wraps TOA's (app.toa.energy) REST API so it can be added to Claude as a custom connector.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node --env-file=.env src/server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/node": "^2.1.0",
+    "@modelcontextprotocol/server": "^2.2.0",
+    "express": "^4.21.0",
+    "zod": "^4.2.0"
+  }
+}
