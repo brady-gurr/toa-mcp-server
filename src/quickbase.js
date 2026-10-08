@@ -12,6 +12,7 @@ import { z } from 'zod';
 
 const DEFAULT_TOP = 100;
 const MAX_TOP = 1000;
+const DEFAULT_FIELD_LIMIT = 100;
 
 // App ID: use the one passed in, else the QB_APP_ID default, so people never
 // have to supply an ID by hand.
@@ -177,24 +178,49 @@ export function registerQuickbaseTools(server) {
     {
       title: 'qb_list_fields',
       description:
-        'List the fields in a Quickbase table (field IDs, labels, types). You need field IDs to build queries. Returns a compact summary unless detail=true.',
+        'Find fields in a Quickbase table (field IDs, labels, types). You need field IDs to build queries. ' +
+        'Big tables (like Projects) have 2,000+ fields, so pass nameContains (e.g. "install date", "status", "customer") ' +
+        'to search by label instead of listing everything. Without it, only the first ' + DEFAULT_FIELD_LIMIT + ' fields are returned.',
       inputSchema: z.object({
         tableId: z.string().describe('Quickbase table ID.'),
-        detail: z.boolean().optional().describe('Return the full raw field definitions (large). Default false.')
+        nameContains: z
+          .string()
+          .optional()
+          .describe('Case-insensitive text to match in the field label. Several words must all appear (any order).'),
+        limit: z.number().int().min(1).max(500).optional().describe('Max fields to return (default ' + DEFAULT_FIELD_LIMIT + ').'),
+        detail: z.boolean().optional().describe('Return the full raw field definitions for the matches (large). Default false.')
       })
     },
-    async ({ tableId, detail }) =>
+    async ({ tableId, nameContains, limit, detail }) =>
       safe(async () => {
         const fields = await qbRequest('/fields', { query: { tableId } });
-        if (detail || !Array.isArray(fields)) return fields;
-        return fields.map((f) => ({
-          id: f.id,
-          label: f.label,
-          fieldType: f.fieldType,
-          mode: f.mode || undefined,
-          required: f.required || undefined,
-          unique: f.unique || undefined
-        }));
+        if (!Array.isArray(fields)) return fields;
+        const words = (nameContains || '').toLowerCase().split(/\s+/).filter(Boolean);
+        const matched = words.length
+          ? fields.filter((f) => {
+              const label = (f.label || '').toLowerCase();
+              return words.every((w) => label.includes(w));
+            })
+          : fields;
+        const cap = limit ?? DEFAULT_FIELD_LIMIT;
+        const shown = matched.slice(0, cap);
+        const out = detail
+          ? shown
+          : shown.map((f) => ({
+              id: f.id,
+              label: f.label,
+              fieldType: f.fieldType,
+              mode: f.mode || undefined,
+              required: f.required || undefined,
+              unique: f.unique || undefined
+            }));
+        return {
+          totalFields: fields.length,
+          matched: matched.length,
+          returned: shown.length,
+          note: matched.length > shown.length ? 'More matches exist — narrow nameContains or raise limit.' : undefined,
+          fields: out
+        };
       })
   );
 
