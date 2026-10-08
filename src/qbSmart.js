@@ -181,7 +181,18 @@ async function buildWhere(tableId, { filters, match, where }) {
 
 // --- result shaping ---------------------------------------------------------
 
+const UTC_STAMP = /^\d{4}-\d{2}-\d{2}T(\d{2}):(\d{2})(:\d{2}(\.\d+)?)?Z$/;
+const MT_FMT = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Denver', year: 'numeric', month: '2-digit', day: '2-digit', hour: 'numeric', minute: '2-digit', hour12: true, timeZoneName: 'short' });
+// Quickbase returns date-time fields in UTC; show them in Mountain Time.
+function toMountain(s) {
+  const m = UTC_STAMP.exec(s);
+  if (!m || (m[1] === '00' && m[2] === '00')) return s; // date-only values arrive as midnight UTC
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? s : MT_FMT.format(d).replace(',', '');
+}
+
 export function plain(v) {
+  if (typeof v === 'string') return toMountain(v);
   if (Array.isArray(v)) return v.map(plain);
   if (v && typeof v === 'object') return v.name ?? v.email ?? v.url ?? JSON.stringify(v);
   return v;

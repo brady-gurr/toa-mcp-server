@@ -35,7 +35,7 @@ export const SERVER_INSTRUCTIONS =
   'Say what you checked and what you are unsure about. Then, if a Sparky connector is available, ask Sparky once with a specific question that includes the table, field or ID involved ' +
   '(Sparky is slow, so use it only when actually needed). For Quickbase schema or field-meaning questions Sparky cannot settle, suggest asking Dev and offer to draft the message. ' +
   'Never send anything to Dev or anyone else without the user saying so. ' +
-  'Kin conventions: a system size of 0.00001 kW in Quickbase or TOA means a battery-only project (it is not missing or placeholder data). ' +
+  'Kin conventions: a system size of 0.00001 kW in Quickbase or TOA means a battery-only project; describe it as battery-only, never as a placeholder or missing data. ' +
   'TOA scheduling and its integrations are still being rolled out, so status or schedule gaps between Quickbase and TOA are expected for now; report them as observations, not errors.';
 
 // --- small utilities --------------------------------------------------------
