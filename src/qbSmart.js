@@ -15,8 +15,8 @@ import { toaRequest } from './toaClient.js';
 
 // The Kin Projects table and the field IDs we rely on for find/match. These are
 // stable IDs from the app; override the table with QB_PROJECTS_TABLE_ID if needed.
-const projectsTableId = () => process.env.QB_PROJECTS_TABLE_ID || 'br9kwm8na';
-const PF = {
+export const projectsTableId = () => process.env.QB_PROJECTS_TABLE_ID || 'br9kwm8na';
+export const PF = {
   recordId: 3,
   name: 145,
   address: 146,
@@ -31,7 +31,7 @@ const PF = {
   installCompleted: 534,
   enerfloDealId: 1875
 };
-const PROJECT_SELECT = Object.values(PF);
+export const PROJECT_SELECT = Object.values(PF);
 
 // --- small cache (tables and fields rarely change) -------------------------
 
@@ -47,16 +47,22 @@ async function cached(key, loader) {
 
 // --- helpers ---------------------------------------------------------------
 
-function textResult(data) {
+export function textResult(data) {
   return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
 }
 
-async function safe(fn) {
+export function escalationHint(err) {
+  return /No (field|table) matches|ambiguous|several tables|is not set/i.test(err.message)
+    ? 'If you cannot resolve this after one or two alternate tries, ask Sparky once with the details above (it is slow, so only when needed); for Quickbase schema or field-meaning questions, suggest asking Dev and offer to draft the message (never send without the user\'s OK).'
+    : undefined;
+}
+
+export async function safe(fn) {
   try {
     return textResult(await fn());
   } catch (err) {
     return {
-      content: [{ type: 'text', text: JSON.stringify({ error: err.message, status: err.status, details: err.body }, null, 2) }],
+      content: [{ type: 'text', text: JSON.stringify({ error: err.message, status: err.status, details: err.body, hint: escalationHint(err) }, null, 2) }],
       isError: true
     };
   }
@@ -94,7 +100,7 @@ function normOp(op) {
 }
 
 // Quote a value for a Quickbase query string: 'text', with \ and ' escaped.
-function q(value) {
+export function q(value) {
   return "'" + String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
 }
 
@@ -125,7 +131,7 @@ async function resolveTable(ref) {
   );
 }
 
-async function getFields(tableId) {
+export async function getFields(tableId) {
   return cached('fields:' + tableId, async () => {
     const f = await qbRequest('/fields', { query: { tableId } });
     return Array.isArray(f) ? f.map((x) => ({ id: x.id, label: x.label || '' })) : [];
@@ -175,14 +181,14 @@ async function buildWhere(tableId, { filters, match, where }) {
 
 // --- result shaping ---------------------------------------------------------
 
-function plain(v) {
+export function plain(v) {
   if (Array.isArray(v)) return v.map(plain);
   if (v && typeof v === 'object') return v.name ?? v.email ?? v.url ?? JSON.stringify(v);
   return v;
 }
 
 // Rows keyed by field label (not ID), with empty values dropped to save space.
-function labelRows(result, rawIds = false) {
+export function labelRows(result, rawIds = false) {
   const labelById = new Map((result.fields || []).map((f) => [String(f.id), f.label]));
   const seen = {};
   for (const l of labelById.values()) seen[l] = (seen[l] || 0) + 1;
@@ -203,7 +209,7 @@ function labelRows(result, rawIds = false) {
   });
 }
 
-const runQuery = (tableId, body) => qbRequest('/records/query', { method: 'POST', body: { from: tableId, ...body } });
+export const runQuery = (tableId, body) => qbRequest('/records/query', { method: 'POST', body: { from: tableId, ...body } });
 
 const fieldRef = z.union([z.string(), z.number()]);
 const filterShape = z.object({
@@ -237,7 +243,7 @@ async function findProjects(query, top = 10) {
   return { rows: labelRows(result), rawRows: result.data || [], total: result.metadata?.totalRecords ?? 0 };
 }
 
-const norm = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+export const norm = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 const cellVal = (row, id) => plain(row?.[String(id)]?.value);
 
 async function toaProjectFor(externalId) {
@@ -397,56 +403,6 @@ export function registerSmartQuickbaseTools(server) {
             truncated ? `Stopped after ${MAX_PAGES * PAGE} records; counts are partial.` : undefined
           ].filter(Boolean).join(' ') || undefined
         };
-      })
-  );
-
-  server.registerTool(
-    'qb_match_project_toa',
-    {
-      title: 'qb_match_project_toa',
-      description:
-        'Line a Kin project up across Quickbase and TOA. A TOA project\'s externalId is the Quickbase Record ID#, so this finds the Quickbase project and its TOA project and flags differences ' +
-        '(missing in TOA, name or system size mismatch). Pass a customer name, address, Record ID# (e.g. "11306"), or a TOA project id.',
-      inputSchema: z.object({
-        query: z.string().describe('Customer name, address, Record ID# / TOA externalId, or TOA project id.'),
-        top: z.number().int().min(1).max(5).optional().describe('Max projects to compare (default 3).')
-      })
-    },
-    async ({ query, top }) =>
-      safe(async () => {
-        const limit = top ?? 3;
-        let text = String(query).trim();
-        // A 24-char hex string is a TOA project id: look it up to get the Record ID#.
-        if (/^[0-9a-f]{24}$/i.test(text)) {
-          const { data } = await toaRequest(`/projects/${encodeURIComponent(text)}`);
-          if (!data?.externalId) return { query, error: 'That TOA project has no externalId, so it can\'t be matched to Quickbase.', toa: data };
-          text = String(data.externalId);
-        }
-        const { rawRows, total } = await findProjects(text, limit);
-        const results = [];
-        for (const row of rawRows) {
-          const recordId = cellVal(row, PF.recordId);
-          const qb = {
-            recordId,
-            name: cellVal(row, PF.name),
-            address: cellVal(row, PF.address),
-            status: cellVal(row, PF.status),
-            systemSizeKw: cellVal(row, PF.systemSize)
-          };
-          const toa = await toaProjectFor(recordId);
-          const checks = toa
-            ? {
-                foundInToa: true,
-                nameMatches: norm(qb.name) === norm(toa.name),
-                systemSizeMatches:
-                  qb.systemSizeKw === null || qb.systemSizeKw === undefined || toa.systemSize === null || toa.systemSize === undefined
-                    ? undefined
-                    : Math.abs(Number(qb.systemSizeKw) - Number(toa.systemSize)) < 0.01
-              }
-            : { foundInToa: false };
-          results.push({ quickbase: qb, toa, checks });
-        }
-        return { query, quickbaseMatches: total, compared: results.length, results };
       })
   );
 }

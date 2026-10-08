@@ -4,6 +4,7 @@ import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
 import { registerAllTools } from './tools.js';
 import { registerQuickbaseTools } from './quickbase.js';
 import { registerSmartQuickbaseTools } from './qbSmart.js';
+import { registerOpsTools, SERVER_INSTRUCTIONS } from './ops.js';
 
 const PORT = process.env.PORT || 3000;
 
@@ -69,9 +70,10 @@ app.use('/mcp', (req, res, next) => {
 });
 
 function buildServer() {
-  const server = new McpServer({ name: 'toa-energy', version: '1.0.0' });
+  const server = new McpServer({ name: 'toa-energy', version: '1.0.0' }, { instructions: SERVER_INSTRUCTIONS });
   registerAllTools(server);
   registerQuickbaseTools(server); // no-op unless QB_USER_TOKEN + QB_REALM_HOSTNAME are set
+  registerOpsTools(server); // schedule, workload, stats, project 360, TOA<->QB match, sync check
   registerSmartQuickbaseTools(server); // label-based search, project find, counts, TOA matching
   return server;
 }
