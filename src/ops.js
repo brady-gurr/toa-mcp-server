@@ -34,7 +34,9 @@ export const SERVER_INSTRUCTIONS =
   'TOA and Quickbase disagreeing, or a business-rule question the data cannot answer), do not guess. ' +
   'Say what you checked and what you are unsure about. Then, if a Sparky connector is available, ask Sparky once with a specific question that includes the table, field or ID involved ' +
   '(Sparky is slow, so use it only when actually needed). For Quickbase schema or field-meaning questions Sparky cannot settle, suggest asking Dev and offer to draft the message. ' +
-  'Never send anything to Dev or anyone else without the user saying so.';
+  'Never send anything to Dev or anyone else without the user saying so. ' +
+  'Kin conventions: a system size of 0.00001 kW in Quickbase or TOA means a battery-only project (it is not missing or placeholder data). ' +
+  'TOA scheduling and its integrations are still being rolled out, so status or schedule gaps between Quickbase and TOA are expected for now; report them as observations, not errors.';
 
 // --- small utilities --------------------------------------------------------
 
@@ -241,6 +243,7 @@ async function toaProjectRaw(externalId) {
 function compareProject(qb, toa) {
   if (!toa) return { foundInToa: false };
   const checks = { foundInToa: true, nameMatches: norm(qb.name) === norm(toa.name) };
+  if (Number(qb.systemSizeKw) > 0 && Number(qb.systemSizeKw) < 0.001) checks.batteryOnly = true; // 0.00001 kW = battery-only project
   if (qb.systemSizeKw !== null && qb.systemSizeKw !== undefined && toa.systemSize !== null && toa.systemSize !== undefined) {
     checks.systemSizeMatches = Math.abs(Number(qb.systemSizeKw) - Number(toa.systemSize)) < 0.01;
   }
