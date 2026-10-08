@@ -64,7 +64,6 @@ app.use('/mcp', (req, res, next) => {
     req.connectorUser = name;
     return next();
   }
-  console.log("[auth-debug] 401 method=" + req.method + " hasAuth=" + Boolean(req.headers.authorization) + " len=" + (req.headers.authorization || "").length + " starts=" + (req.headers.authorization || "").slice(0, 7) + " ua=" + (req.headers["user-agent"] || ""));
   res.status(401).json({ error: "Unauthorized" });
 });
 
