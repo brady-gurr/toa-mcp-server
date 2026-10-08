@@ -9,8 +9,21 @@ Everything is **read-only**. Nothing Claude does through this connector can crea
 
 ## Tools
 
-- **TOA (21):** projects, customers, sites, tracks, work types, work (list/get), form submissions, events, assignments, teams, users, and the `/changes` sync feed. See `src/tools.js`. TOA's `POST /work` and `PATCH /work/:id` are deliberately not implemented.
-- **Quickbase (7, only if configured):** `qb_get_app`, `qb_list_tables` (search by name), `qb_get_table`, `qb_list_fields` (search by label), `qb_list_reports`, `qb_run_report`, `qb_query_records`. Writes are blocked in code: only GETs plus the two read-only POSTs (records query, report run) are allowed. See `src/quickbase.js`.
+All tools are annotated read-only.
+
+- **TOA (21):** projects, customers, sites, tracks, work types, work (list/get), form submissions, events, assignments, teams, users, and the `/changes` sync feed (`src/tools.js`). TOA's `POST /work` and `PATCH /work/:id` are deliberately not implemented.
+- **Quickbase, raw (7):** `qb_get_app`, `qb_list_tables`, `qb_get_table`, `qb_list_fields`, `qb_list_reports`, `qb_run_report`, `qb_query_records` (`src/quickbase.js`). Only GETs plus the records-query and report-run POSTs are allowed in code.
+- **Quickbase, by name (3):** `qb_search_records` (table and field *names*, filters, sort, no IDs needed), `qb_find_project` (by customer name, address, record ID or Enerflo deal ID), `qb_count_records` (totals or group-by) (`src/qbSmart.js`).
+- **Ops (6):** `toa_schedule` (day or range, by team), `crew_workload` (unassigned, double-booked, overloaded days), `toa_schedule_stats` (repeat visits, lead time, by team), `qb_match_project_toa` (compare name, address, size, phone, email), `project_360` (Quickbase + TOA + events + work in one view), `sync_check` (Quickbase "Create Job in TOA" vs. what exists in TOA) (`src/ops.js`).
+
+Quickbase tools only appear if `QB_USER_TOKEN` and `QB_REALM_HOSTNAME` are set.
+
+## Kin conventions built in
+
+- A system size of **0.00001 kW** means a **battery-only** project.
+- Quickbase and TOA gaps are expected while integrations are still being built.
+- Quickbase date-times arrive in UTC and are shown in **Mountain Time**.
+- Server instructions tell Claude to try Sparky (separate connector) and, with the user's OK, Dev (Quickbase schema questions) when this connector can't resolve something. Resolution errors include a `hint` to that effect.
 
 ## Environment variables
 
@@ -21,9 +34,8 @@ Everything is **read-only**. Nothing Claude does through this connector can crea
 | `QB_USER_TOKEN` | for Quickbase | Quickbase user token (acts with that user's permissions) |
 | `QB_REALM_HOSTNAME` | for Quickbase | e.g. `yourcompany.quickbase.com` |
 | `QB_APP_ID` | optional | Default Quickbase app, so nobody has to supply an app ID |
+| `QB_PROJECTS_TABLE_ID` | optional | Projects table (defaults to `br9kwm8na`) |
 | `TOA_BASE_URL`, `QB_BASE_URL`, `PORT` | optional | Overrides (Railway sets `PORT` itself) |
-
-If `QB_USER_TOKEN` and `QB_REALM_HOSTNAME` aren't both set, the Quickbase tools simply don't appear.
 
 ## Run it locally
 
@@ -78,5 +90,6 @@ Generate a secret with `openssl rand -hex 32`, add `name:secret` to `MCP_SHARED_
 
 - **Stateless server:** a fresh MCP server and transport are created for every request. Reusing one shared instance caused 500s on `initialize`.
 - **Rate limits:** TOA throttles per token. Quickbase has per-IP limits (429 when exceeded). Fine for ad hoc questions; cache if you start pulling large lists often.
-- **Write access:** not implemented. TOA writes would mean adding `toa_create_work` / `toa_update_work` back in.
+- **Write access:** not implemented, by design. TOA writes would mean adding `toa_create_work` / `toa_update_work` back in.
+- **Permissions in Claude:** set the connector's tools to "Always allow" under Customize -> Connectors -> Tool permissions to avoid approval prompts.
 - **Token rotation:** update the token in Railway Variables; nothing else changes.
