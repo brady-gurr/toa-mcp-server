@@ -5,12 +5,21 @@
 // set, the Quickbase tools simply aren't registered and nothing else changes):
 //   QB_USER_TOKEN       Quickbase user token (acts with that user's permissions)
 //   QB_REALM_HOSTNAME   e.g. yourcompany.quickbase.com
+//   QB_APP_ID           default app ID so tools don't need one passed in
 //   QB_BASE_URL         override, defaults to https://api.quickbase.com/v1
 
 import { z } from 'zod';
 
 const DEFAULT_TOP = 100;
 const MAX_TOP = 1000;
+
+// App ID: use the one passed in, else the QB_APP_ID default, so people never
+// have to supply an ID by hand.
+function resolveAppId(appId) {
+  const id = appId || process.env.QB_APP_ID;
+  if (!id) throw new Error('No Quickbase app ID given and QB_APP_ID is not set on the server.');
+  return id;
+}
 
 export function quickbaseConfigured() {
   return Boolean(process.env.QB_USER_TOKEN && process.env.QB_REALM_HOSTNAME);
@@ -113,20 +122,40 @@ export function registerQuickbaseTools(server) {
     'qb_get_app',
     {
       title: 'qb_get_app',
-      description: 'Get a Quickbase app\'s details by app ID (the id in the app URL, e.g. bq1abc2de).',
-      inputSchema: z.object({ appId: z.string().describe('Quickbase app ID.') })
+      description: 'Get the Quickbase app\'s details. No ID needed — uses the configured default app unless appId is given.',
+      inputSchema: z.object({ appId: z.string().optional().describe('Quickbase app ID. Optional — defaults to the server\'s configured app.') })
     },
-    async ({ appId }) => safe(() => qbRequest(`/apps/${encodeURIComponent(appId)}`))
+    async ({ appId }) => safe(() => qbRequest(`/apps/${encodeURIComponent(resolveAppId(appId))}`))
   );
 
   server.registerTool(
     'qb_list_tables',
     {
       title: 'qb_list_tables',
-      description: 'List the tables in a Quickbase app (names and table IDs).',
-      inputSchema: z.object({ appId: z.string().describe('Quickbase app ID.') })
+      description:
+        'Find Quickbase tables by name. No app ID needed. The app has ~170 tables, so pass nameContains ' +
+        '(e.g. "project", "customer", "install") to search instead of listing everything. Returns table id, name and alias.',
+      inputSchema: z.object({
+        nameContains: z.string().optional().describe('Case-insensitive text to match in the table name or alias.'),
+        appId: z.string().optional().describe('Optional — defaults to the server\'s configured app.'),
+        detail: z.boolean().optional().describe('Return full raw table definitions (large). Default false.')
+      })
     },
-    async ({ appId }) => safe(() => qbRequest('/tables', { query: { appId } }))
+    async ({ nameContains, appId, detail }) =>
+      safe(async () => {
+        const tables = await qbRequest('/tables', { query: { appId: resolveAppId(appId) } });
+        if (!Array.isArray(tables)) return tables;
+        const needle = nameContains?.trim().toLowerCase();
+        const matched = needle
+          ? tables.filter((t) => `${t.name || ''} ${t.alias || ''}`.toLowerCase().includes(needle))
+          : tables;
+        if (detail) return matched;
+        return {
+          totalTables: tables.length,
+          matched: matched.length,
+          tables: matched.map((t) => ({ id: t.id, name: t.name, alias: t.alias, keyFieldId: t.keyFieldId }))
+        };
+      })
   );
 
   server.registerTool(
@@ -135,11 +164,12 @@ export function registerQuickbaseTools(server) {
       title: 'qb_get_table',
       description: 'Get one Quickbase table\'s details (key field, name, etc.).',
       inputSchema: z.object({
-        appId: z.string().describe('Quickbase app ID.'),
-        tableId: z.string().describe('Quickbase table ID.')
+        tableId: z.string().describe('Quickbase table ID (find it with qb_list_tables).'),
+        appId: z.string().optional().describe('Quickbase app ID. Optional — defaults to the server\'s configured app.')
       })
     },
-    async ({ appId, tableId }) => safe(() => qbRequest(`/tables/${encodeURIComponent(tableId)}`, { query: { appId } }))
+    async ({ appId, tableId }) =>
+      safe(() => qbRequest(`/tables/${encodeURIComponent(tableId)}`, { query: { appId: resolveAppId(appId) } }))
   );
 
   server.registerTool(
