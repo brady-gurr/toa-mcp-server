@@ -71,6 +71,15 @@ app.use('/mcp', (req, res, next) => {
 
 function buildServer() {
   const server = new McpServer({ name: 'toa-energy', version: '1.0.0' }, { instructions: SERVER_INSTRUCTIONS });
+  // Every tool in this wrapper is read-only. Declare that on each one so Claude
+  // can group them as "read-only" in its tool-permission settings.
+  const register = server.registerTool.bind(server);
+  server.registerTool = (name, config, handler) =>
+    register(
+      name,
+      { ...config, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true, ...(config.annotations || {}) } },
+      handler
+    );
   registerAllTools(server);
   registerQuickbaseTools(server); // no-op unless QB_USER_TOKEN + QB_REALM_HOSTNAME are set
   registerOpsTools(server); // schedule, workload, stats, project 360, TOA<->QB match, sync check

@@ -208,20 +208,12 @@ const digits10 = (s) => String(s ?? '').replace(/\D/g, '').slice(-10);
 const sameEmail = (a, b) => String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
 const toaAddrString = (a) => (a ? [a.line1, a.city, a.state, a.postalCode].filter(Boolean).join(', ') : undefined);
 
-// Find Quickbase's customer phone/email fields in the Projects table by label.
+// Customer contact fields in the Projects table ("Residential Client Main Contact"):
+// 147 office/home phone, 148 mobile phone, 149 email.
+const CONTACT_PHONE_IDS = [148, 147];
+const CONTACT_EMAIL_ID = 149;
 async function contactFields() {
-  return cached('contactFields', async () => {
-    const fields = await getFields(projectsTableId());
-    const pick = (kind, re) => {
-      const cands = fields.filter((f) => re.test(f.label));
-      const exact = cands.filter((f) => f.label.trim().toLowerCase() === `customer ${kind}`);
-      if (exact.length === 1) return { id: exact[0].id, label: exact[0].label };
-      const cust = cands.filter((f) => /^customer\b/i.test(f.label));
-      if (cust.length === 1) return { id: cust[0].id, label: cust[0].label };
-      return { id: null, candidates: cands.slice(0, 6).map((f) => `${f.id} ${f.label}`) };
-    };
-    return { phone: pick('phone', /phone/i), email: pick('email', /e-?mail/i) };
-  });
+  return { phone: { id: CONTACT_PHONE_IDS[0] }, email: { id: CONTACT_EMAIL_ID } };
 }
 
 async function toaProjectRaw(externalId) {
@@ -249,7 +241,8 @@ function compareProject(qb, toa) {
   }
   const addr = addressMatches(qb.address, toa.property?.address);
   if (addr !== undefined) checks.addressMatches = addr;
-  if (qb.phone && toa.customer?.phone) checks.phoneMatches = digits10(qb.phone) === digits10(toa.customer.phone);
+  const qbPhones = qb.phones?.length ? qb.phones : qb.phone ? [qb.phone] : [];
+  if (qbPhones.length && toa.customer?.phone) checks.phoneMatches = qbPhones.some((ph) => digits10(ph) === digits10(toa.customer.phone));
   if (qb.email && toa.customer?.email) checks.emailMatches = sameEmail(qb.email, toa.customer.email);
   const problems = Object.entries(checks)
     .filter(([k, v]) => k.endsWith('Matches') && v === false)
@@ -274,7 +267,7 @@ function projectSearchWhere(query) {
 // Look up Kin projects in Quickbase, with phone/email when those fields can be identified.
 async function lookupProjects(query, top) {
   const contact = await contactFields();
-  const extra = [contact.phone.id, contact.email.id].filter(Boolean);
+  const extra = [...CONTACT_PHONE_IDS, contact.email.id];
   const result = await runQuery(projectsTableId(), {
     select: [...PROJECT_SELECT, ...extra],
     where: projectSearchWhere(query),
@@ -289,7 +282,8 @@ async function lookupProjects(query, top) {
     address: cell(row, PF.address),
     status: cell(row, PF.status),
     systemSizeKw: cell(row, PF.systemSize),
-    phone: cell(row, contact.phone.id),
+    phones: CONTACT_PHONE_IDS.map((id) => cell(row, id)).filter(Boolean),
+    phone: CONTACT_PHONE_IDS.map((id) => cell(row, id)).filter(Boolean).join(' / ') || undefined,
     email: cell(row, contact.email.id)
   }));
   return { projects, total: result.metadata?.totalRecords ?? 0, contact, result };
