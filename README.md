@@ -1,98 +1,82 @@
-# TOA MCP wrapper
+# TOA + Quickbase MCP wrapper
 
-A small remote MCP server that wraps TOA's REST API (`https://app.toa.energy/api/x`)
-so it can be added to Claude as a **custom connector**. TOA itself has no MCP
-server — this is the bridge.
+A small remote MCP server that lets Claude read data from **TOA** (`https://app.toa.energy/api/x`) and, optionally, **Quickbase**, as a custom connector. TOA only has a REST API, so this is the bridge.
 
-- Claude <-> this server: protected by a shared secret you make up (`MCP_SHARED_SECRET`).
-- This server <-> TOA: your TOA installer API token (`TOA_API_TOKEN`), kept
-  server-side only. Claude never sees it.
+Everything is **read-only**. Nothing Claude does through this connector can create, change or delete data in TOA or Quickbase.
 
-21 **read-only** tools are registered, covering everything readable in TOA's
-documented API: projects, customers, sites, tracks, work types, work
-(list/get), form submissions, events, assignments, teams, users, and the
-`/changes` sync feed. There is no create/update — TOA's `POST /work` and
-`PATCH /work/:id` are deliberately left unimplemented, so nothing Claude
-does through this connector can change data in TOA. See `src/tools.js` for
-the full list, and the comment near the top of `registerAllTools` if you
-ever want to add write tools back in.
+- Claude <-> this server: protected by per-person named secrets (`MCP_SHARED_SECRETS`).
+- This server <-> TOA / Quickbase: API tokens (`TOA_API_TOKEN`, `QB_USER_TOKEN`) kept server-side only. Claude never sees them.
 
-## 1. Run it locally (sanity check)
+## Tools
+
+- **TOA (21):** projects, customers, sites, tracks, work types, work (list/get), form submissions, events, assignments, teams, users, and the `/changes` sync feed. See `src/tools.js`. TOA's `POST /work` and `PATCH /work/:id` are deliberately not implemented.
+- **Quickbase (7, only if configured):** `qb_get_app`, `qb_list_tables` (search by name), `qb_get_table`, `qb_list_fields` (search by label), `qb_list_reports`, `qb_run_report`, `qb_query_records`. Writes are blocked in code: only GETs plus the two read-only POSTs (records query, report run) are allowed. See `src/quickbase.js`.
+
+## Environment variables
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `TOA_API_TOKEN` | yes | TOA installer API token |
+| `MCP_SHARED_SECRETS` | yes | Named secrets, `name:secret,name2:secret2` |
+| `QB_USER_TOKEN` | for Quickbase | Quickbase user token (acts with that user's permissions) |
+| `QB_REALM_HOSTNAME` | for Quickbase | e.g. `yourcompany.quickbase.com` |
+| `QB_APP_ID` | optional | Default Quickbase app, so nobody has to supply an app ID |
+| `TOA_BASE_URL`, `QB_BASE_URL`, `PORT` | optional | Overrides (Railway sets `PORT` itself) |
+
+If `QB_USER_TOKEN` and `QB_REALM_HOSTNAME` aren't both set, the Quickbase tools simply don't appear.
+
+## Run it locally
 
 ```
 cp .env.example .env
-# fill in TOA_API_TOKEN (from your TOA admin) and MCP_SHARED_SECRET (openssl rand -hex 32)
+# fill in the values; generate each secret with: openssl rand -hex 32
 npm install
 npm start
 ```
 
-Then from another terminal:
+Smoke test (in another terminal):
 
 ```
 curl -s http://localhost:3000/          # -> {"ok":true,...}
 
 curl -s http://localhost:3000/mcp \
-  -H "Authorization: Bearer $MCP_SHARED_SECRET" \
+  -H "Authorization: Bearer YOUR_SECRET" \
   -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
-The second call should return the 21 registered tools as JSON.
+## Hosting (Railway)
 
-> Note: I wrote and syntax-checked this code against the current MCP
-> TypeScript SDK source directly from GitHub, but couldn't run a live
-> `npm install` in my sandbox (the npm registry is blocked there by policy).
-> Run the smoke test above once you've deployed — if something doesn't
-> line up with the SDK's exact current API, that's the first place it'll show.
+This is deployed on Railway, from this GitHub repo.
 
-## 2. Deploy it somewhere with a public HTTPS URL
+1. Railway -> New Project -> Deploy from GitHub repo -> this repo. The `Dockerfile` is detected automatically, and every push to `main` redeploys.
+2. Service -> **Variables**: add the variables above.
+3. Service -> **Settings -> Networking -> Generate Domain** to get the public HTTPS URL.
 
-Claude's custom connectors need a URL it can reach over the internet — pick
-whichever of these you actually have an account for:
+Check a deploy by calling `GET /` (health) and then `tools/list` as above. Per-deployment logs are under Deployments -> Deploy Logs / Network Logs.
 
-**Render.com** (simplest, free tier, no GitHub required)
-1. New -> Web Service -> "Deploy an existing image" or connect a repo.
-2. If you don't want to use Git: `render.yaml`/Docker deploy also works — or
-   just push this folder to a throwaway GitHub repo on your *personal*
-   account and connect that.
-3. Set environment variables `TOA_API_TOKEN` and `MCP_SHARED_SECRET` in the
-   Render dashboard (Environment tab).
-4. Build command: `npm install` — Start command: `npm start`.
-5. Render gives you a URL like `https://toa-mcp-wrapper.onrender.com`.
+## Add it to Claude
 
-**Fly.io** (works well with just the Dockerfile here, no GitHub needed)
-```
-fly launch       # detects the Dockerfile, picks an app name
-fly secrets set TOA_API_TOKEN=... MCP_SHARED_SECRET=...
-fly deploy
-```
+Each person adds it in their own Claude account: **Settings -> Connectors -> Add custom connector**.
 
-**Railway** — same idea as Render if you have your own (non-work) Railway
-account: new project -> deploy from this folder or a repo -> set the two
-env vars -> it gives you a public URL.
+- **URL:** `https://<your-railway-domain>/mcp`
+- **Authentication:** **No sign-in**
+- **Request header:** name `authorization`, value `Bearer ` followed by **that person's own secret only**
 
-Any platform that can run a Dockerfile or `npm install && npm start` and
-gives you an HTTPS URL works.
+Gotchas that have bitten before:
+- The header value is `Bearer ` + one secret. Not the whole `MCP_SHARED_SECRETS` line, no `name:` prefix, no angle brackets, no quotes.
+- Paste once. Clear the field first (Cmd+A, Delete). A correct value is 7 + 64 = 71 characters.
+- The URL can't be edited after creation. To change it, remove the connector and add it again.
+- Claude caches a connector's tool list per chat, so after a deploy that changes tools, start a new chat (or Reconnect).
 
-## 3. Add it to Claude
+## Adding and revoking people
 
-In Claude, go to **Settings -> Connectors -> Add custom connector**:
+Generate a secret with `openssl rand -hex 32`, add `name:secret` to `MCP_SHARED_SECRETS` in Railway Variables (comma-separated), and save. Railway redeploys. To revoke someone, remove their pair and save. The legacy single `MCP_SHARED_SECRET` variable is still accepted as the user `default`.
 
-- **URL**: `https://<your-deployed-host>/mcp`
-- **Authentication**: choose **No sign-in**
-- **Request headers**: add `Authorization: Bearer <your MCP_SHARED_SECRET>`
+## Notes
 
-Click **Add**. Claude should list the TOA tools (`toa_list_projects`,
-`toa_get_work`, etc.) the next time you ask it something that needs them.
-
-## Notes / things to revisit
-
-- **Rate limits**: TOA throttles per-token (serial per token, a per-minute
-  and per-day cap). Fine for ad hoc questions; if you start pulling large
-  lists often, read TOA's "Rate limits & sync" docs and consider caching.
-- **Write access**: not implemented. When you're ready for Claude to create
-  or update work in TOA, say so and I'll add `toa_create_work` /
-  `toa_update_work` back in (they're documented in TOA's API but intentionally
-  left out here).
-- **Token rotation**: if TOA rotates your `TOA_API_TOKEN`, update it in
-  your hosting platform's env vars and restart/redeploy — nothing else changes.
+- **Stateless server:** a fresh MCP server and transport are created for every request. Reusing one shared instance caused 500s on `initialize`.
+- **Rate limits:** TOA throttles per token. Quickbase has per-IP limits (429 when exceeded). Fine for ad hoc questions; cache if you start pulling large lists often.
+- **Write access:** not implemented. TOA writes would mean adding `toa_create_work` / `toa_update_work` back in.
+- **Token rotation:** update the token in Railway Variables; nothing else changes.
