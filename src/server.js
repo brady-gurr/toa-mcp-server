@@ -9,9 +9,8 @@ const PORT = process.env.PORT || 3000;
 // MCP_SHARED_SECRETS holds one or more named secrets, e.g.
 //   brady:3f9a...,sarah:7c2d...
 // so each person gets their own key and can be revoked individually by
-// removing their "name:secret" pair from the env var and saving (Render
-// restarts automatically on an env var change). Falls back to the older
-// single-secret MCP_SHARED_SECRET var if present, for compatibility.
+// removing their "name:secret" pair from the env var and saving.
+// Falls back to the older single-secret MCP_SHARED_SECRET var if present.
 const SHARED_SECRETS = parseSharedSecrets(process.env.MCP_SHARED_SECRETS);
 if (process.env.MCP_SHARED_SECRET) {
   SHARED_SECRETS.set(process.env.MCP_SHARED_SECRET, 'default');
@@ -39,9 +38,6 @@ if (SHARED_SECRETS.size === 0) {
 
 const app = express();
 
-// Some MCP clients probe with an OPTIONS preflight, and a browser-hosted
-// client enforces CORS — allow it. The shared-secret check below still
-// protects the endpoint; this only controls who's allowed to *ask*.
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
@@ -53,15 +49,12 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: '2mb' }));
 
-// Health check — useful for the hosting platform and for a quick manual check.
+// Health check
 app.get('/', (req, res) => {
   res.json({ ok: true, service: 'toa-mcp-wrapper' });
 });
 
-// Gate the MCP endpoint behind one of the named shared secrets. Give each
-// person's Claude custom connector their own value as an
-// `Authorization: Bearer <their secret>` request header
-// (Add custom connector -> No sign-in -> Request headers).
+// Gate the MCP endpoint behind one of the named shared secrets.
 app.use('/mcp', (req, res, next) => {
   if (SHARED_SECRETS.size === 0) return next();
   const auth = req.headers.authorization || '';
@@ -74,28 +67,42 @@ app.use('/mcp', (req, res, next) => {
   res.status(401).json({ error: 'Unauthorized' });
 });
 
-const server = new McpServer({ name: 'toa-energy', version: '1.0.0' });
-registerAllTools(server);
-registerQuickbaseTools(server); // no-op unless QB_USER_TOKEN + QB_REALM_HOSTNAME are set
+function buildServer() {
+  const server = new McpServer({ name: 'toa-energy', version: '1.0.0' });
+  registerAllTools(server);
+  registerQuickbaseTools(server); // no-op unless QB_USER_TOKEN + QB_REALM_HOSTNAME are set
+  return server;
+}
 
-// Stateless transport: one server instance, reused across requests, no
-// session bookkeeping. Simplest shape for a connector that only POSTs.
-const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-await server.connect(transport);
+// Stateless: a fresh server + transport for every request (the pattern the
+// MCP SDK recommends), so no state is shared between requests or users.
+app.post('/mcp', async (req, res) => {
+  try {
+    const server = buildServer();
+    const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    res.on('close', () => {
+      transport.close();
+      server.close();
+    });
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  } catch (err) {
+    console.error('[toa-mcp-wrapper] MCP request failed:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal server error' }, id: null });
+    }
+  }
+});
 
-// Handle all three Streamable HTTP verbs on the same transport — some
-// clients probe with GET (open an SSE stream) or DELETE (end a session)
-// even in stateless mode, and an unhandled verb here can make a client
-// conclude the URL isn't a valid MCP server at all.
-app.post('/mcp', (req, res) => {
-  transport.handleRequest(req, res, req.body);
-});
-app.get('/mcp', (req, res) => {
-  transport.handleRequest(req, res);
-});
-app.delete('/mcp', (req, res) => {
-  transport.handleRequest(req, res);
-});
+// No server-initiated streams or sessions in stateless mode.
+const methodNotAllowed = (req, res) => {
+  res
+    .status(405)
+    .set('Allow', 'POST')
+    .json({ jsonrpc: '2.0', error: { code: -32000, message: 'Method not allowed.' }, id: null });
+};
+app.get('/mcp', methodNotAllowed);
+app.delete('/mcp', methodNotAllowed);
 
 app.listen(PORT, () => {
   console.log(`toa-mcp-wrapper listening on port ${PORT}`);
