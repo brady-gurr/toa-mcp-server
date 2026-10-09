@@ -232,6 +232,9 @@ async function collectInstalls({ scope, includeTests, lookbackDays, includeFutur
     const qbCompleted = !isBlank(raw(row, P.installCompleted));
     const s = installSummary(tasks.get(id), today);
     const originalDate = s.originalInstallDate || raw(row, P.installScheduledStart);
+    const completedOn = raw(row, P.installCompleted);
+    const startOn = [s.originalInstallDate, raw(row, P.installScheduledStart)].filter((d) => !isBlank(d)).sort()[0];
+    const backdated = qbCompleted && !isBlank(startOn) && String(completedOn) < String(startOn);
     const rtr = {
       status: plain(raw(row, P.rtrStatus)) || undefined,
       installStatus: plain(raw(row, P.rtrInstallStatus)) || undefined,
@@ -258,6 +261,7 @@ async function collectInstalls({ scope, includeTests, lookbackDays, includeFutur
       serviceTasks: s.serviceTasks.length ? s.serviceTasks : undefined,
       daysSinceOriginal: originalDate ? daysBetween(originalDate, today) : undefined,
       blocker: classify({ qbCompleted, s, rtr }),
+      completedBeforeStart: backdated || undefined,
       qbCompleted
     };
   });
@@ -289,16 +293,21 @@ export function registerTriageTools(server) {
       safe(async () => {
         const { entries, truncated, today } = await collectInstalls({ scope, includeTests, lookbackDays, includeFuture, max: 1000, status });
         const healthy = new Set(['Scheduled', 'In progress', 'Complete']);
-        let rows = entries.filter((e) => (onlyProblems ? !healthy.has(e.blocker) : true));
+        let rows = entries.filter((e) => (onlyProblems ? !healthy.has(e.blocker) || e.completedBeforeStart : true));
         rows.sort((a, b) => (b.daysSinceOriginal ?? -1) - (a.daysSinceOriginal ?? -1));
         const counts = {};
         for (const e of rows) counts[e.blocker] = (counts[e.blocker] || 0) + 1;
+        const backdated = rows.filter((e) => e.completedBeforeStart).length;
+        const parts = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${v} ${k.split(':')[0]}`);
+        if (backdated) parts.push(`${backdated} with a Quickbase complete date earlier than the install start (likely backfilled)`);
         return ({
+          summary: `${rows.length} of ${entries.length} installs checked need attention` + (parts.length ? ': ' + parts.join('; ') : '') + '.',
           asOf: today,
           scope: scope || 'kin',
           checked: entries.length,
           flagged: rows.length,
           byBlocker: counts,
+          completedBeforeStart: backdated,
           truncated: truncated || rows.length > limit || undefined,
           projects: rows.slice(0, limit).map(({ qbCompleted, ...e }) => e),
           note: 'Field-task history is from the Arrivy task mirror in Quickbase. Arrivy is being retired, so TOA events will matter more as they replace it.'
