@@ -46,7 +46,11 @@ const P = {
   permitApproved: 2058,
   ptoSubmitted: 537,
   ptoApproved: 538,
-  ptoMissing: 2007
+  ptoMissing: 2007,
+  rtrStatus: 2715, // RTR (ready-to-review) status of the latest PV module install task
+  rtrInstallStatus: 2716, // Fully Installed / Partially Completed
+  rtrWorkRemaining: 2719,
+  rtrUpdatedAt: 2718
 };
 
 // Arrivy task mirror table fields.
@@ -162,7 +166,8 @@ async function tasksFor(projectIds, templateIds) {
 }
 
 const OPEN_FIELD = new Set(['ARRIVING', 'ENROUTE', 'STARTED']);
-const submittedOrApproved = (t) => !isBlank(t.submittedAt) || !isBlank(t.approvedAt) || t.status === 'Approved';
+const submittedOrApproved = (t) =>
+  !isBlank(t.submittedAt) || !isBlank(t.approvedAt) || t.status === 'Approved' || String(t.fieldStatus || '').toUpperCase() === 'COMPLETE';
 
 // Summarize one project's install tasks.
 function installSummary(tasks = [], today) {
@@ -186,10 +191,17 @@ function installSummary(tasks = [], today) {
   };
 }
 
-function classify({ qbCompleted, s, today }) {
+const asList = (v) => (Array.isArray(v) ? v : isBlank(v) ? [] : [v]).map((x) => plain(x)).filter(Boolean);
+
+function classify({ qbCompleted, s, rtr }) {
   if (s.installTasks === 0) return qbCompleted ? 'QB says complete, but no install task exists' : 'No install task scheduled';
   if (qbCompleted && !s.taskSubmitted) return 'FALSE COMPLETE: QB shows install complete, but no install task was submitted';
-  if (qbCompleted) return 'Complete';
+  if (qbCompleted) {
+    if (/partial/i.test(rtr.installStatus || '')) return 'Partially completed per RTR (work remaining)';
+    if (rtr.workRemaining.length) return 'RTR conflict: says Fully Installed but lists work remaining';
+    if (!rtr.installStatus) return 'No RTR on file for a completed install';
+    return 'Complete';
+  }
   const f = String(s.latestFieldStatus || '').toUpperCase();
   if (f === 'NOSHOW') return 'No-show on last visit';
   if (f === 'EXCEPTION') return 'Exception on last visit';
@@ -200,10 +212,10 @@ function classify({ qbCompleted, s, today }) {
 }
 
 // Shared engine: Active installs whose start date has arrived, plus recently "completed" ones to check.
-async function collectInstalls({ scope, includeTests, lookbackDays, includeFuture, max }) {
+async function collectInstalls({ scope, includeTests, lookbackDays, includeFuture, max, status = 'Active' }) {
   const today = todayDenver();
-  const select = [P.recordId, P.name, P.address, P.status, P.installScheduledStart, P.installCompleted, P.coordinator, P.systemSize];
-  const base = [`{${P.status}.EX.${q('Active')}}`, ...scopeClauses(scope, includeTests)];
+  const select = [P.recordId, P.name, P.address, P.status, P.installScheduledStart, P.installCompleted, P.coordinator, P.systemSize, P.rtrStatus, P.rtrInstallStatus, P.rtrWorkRemaining];
+  const base = [...(status === 'any' ? [] : [`{${P.status}.EX.${q(status)}}`]), ...scopeClauses(scope, includeTests)];
   const open = [...base, `{${P.installCompleted}.EX.${q('')}}`, `{${P.installScheduledStart}.XEX.${q('')}}`];
   if (!includeFuture) open.push(`{${P.installScheduledStart}.OBF.${q(today)}}`);
   const recent = [...base, `{${P.installCompleted}.OAF.${q(addDays(today, -lookbackDays))}}`];
@@ -220,6 +232,11 @@ async function collectInstalls({ scope, includeTests, lookbackDays, includeFutur
     const qbCompleted = !isBlank(raw(row, P.installCompleted));
     const s = installSummary(tasks.get(id), today);
     const originalDate = s.originalInstallDate || raw(row, P.installScheduledStart);
+    const rtr = {
+      status: plain(raw(row, P.rtrStatus)) || undefined,
+      installStatus: plain(raw(row, P.rtrInstallStatus)) || undefined,
+      workRemaining: asList(raw(row, P.rtrWorkRemaining))
+    };
     return {
       recordId: Number(id),
       customer: plain(raw(row, P.name)),
@@ -231,12 +248,16 @@ async function collectInstalls({ scope, includeTests, lookbackDays, includeFutur
       originalInstallDate: originalDate,
       currentInstallDate: s.currentInstallDate,
       rolls: s.rolls,
+      projectStatus: plain(raw(row, P.status)),
       latestFieldStatus: s.latestFieldStatus,
       latestTaskStatus: s.latestTaskStatus,
       taskSubmitted: s.taskSubmitted,
+      rtrInstallStatus: rtr.installStatus,
+      rtrStatus: rtr.status,
+      rtrWorkRemaining: rtr.workRemaining.length ? rtr.workRemaining : undefined,
       serviceTasks: s.serviceTasks.length ? s.serviceTasks : undefined,
       daysSinceOriginal: originalDate ? daysBetween(originalDate, today) : undefined,
-      blocker: classify({ qbCompleted, s, today }),
+      blocker: classify({ qbCompleted, s, rtr }),
       qbCompleted
     };
   });
@@ -253,19 +274,20 @@ export function registerTriageTools(server) {
     {
       title: 'Install work-in-progress triage',
       description:
-        'Installs that are NOT truly complete, for Active projects. Reconciles the Quickbase install-completed date against the field-task record, because they can disagree (QB shows complete but the install task was never submitted = FALSE COMPLETE). ' +
+        'Installs that are NOT truly complete. Reconciles the Quickbase install-completed date against BOTH the field task (never submitted = FALSE COMPLETE) and the crew RTR (Partially Completed, work remaining, RTR saying Fully Installed while listing work remaining, or no RTR at all). ' +
         'Per project: original vs current install date, number of reschedules (rolls), last field status, and the blocker. Defaults to Kin Home, non-test projects. Read-only.',
       inputSchema: {
         ...scopeShape,
-        lookbackDays: z.number().int().min(0).max(120).optional().describe('Also check installs QB marked complete within this many days for false-completes (default 21; 0 = skip).'),
+        status: z.string().optional().describe('Project status to include (default Active; use "any" to include Complete/other statuses too).'),
+        lookbackDays: z.number().int().min(0).max(200).optional().describe('Also check installs QB marked complete within this many days against the field task and RTR (default 60; 0 = skip).'),
         includeFuture: z.boolean().optional().describe('Include projects whose install start date is still in the future (default false).'),
         onlyProblems: z.boolean().optional().describe('Hide rows that look healthy (Scheduled / In progress / Complete). Default true.'),
         limit: z.number().int().min(1).max(200).optional().describe('Max rows returned (default 60).')
       }
     },
-    async ({ scope, includeTests, lookbackDays = 21, includeFuture = false, onlyProblems = true, limit = 60 }) =>
+    async ({ scope, includeTests, status = 'Active', lookbackDays = 60, includeFuture = false, onlyProblems = true, limit = 60 }) =>
       safe(async () => {
-        const { entries, truncated, today } = await collectInstalls({ scope, includeTests, lookbackDays, includeFuture, max: 500 });
+        const { entries, truncated, today } = await collectInstalls({ scope, includeTests, lookbackDays, includeFuture, max: 1000, status });
         const healthy = new Set(['Scheduled', 'In progress', 'Complete']);
         let rows = entries.filter((e) => (onlyProblems ? !healthy.has(e.blocker) : true));
         rows.sort((a, b) => (b.daysSinceOriginal ?? -1) - (a.daysSinceOriginal ?? -1));
