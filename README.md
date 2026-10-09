@@ -15,7 +15,7 @@ All tools are annotated read-only.
 - **Quickbase, raw (7):** `qb_get_app`, `qb_list_tables`, `qb_get_table`, `qb_list_fields`, `qb_list_reports`, `qb_run_report`, `qb_query_records` (`src/quickbase.js`). Only GETs plus the records-query and report-run POSTs are allowed in code.
 - **Quickbase, by name (3):** `qb_search_records` (table and field *names*, filters, sort, no IDs needed), `qb_find_project` (by customer name, address, record ID or Enerflo deal ID), `qb_count_records` (totals or group-by) (`src/qbSmart.js`).
 - **Ops (6):** `toa_schedule` (day or range, by team), `crew_workload` (unassigned, double-booked, overloaded days), `toa_schedule_stats` (repeat visits, lead time, by team), `qb_match_project_toa` (compare name, address, size, phone, email), `project_360` (Quickbase + TOA + events + work in one view), `sync_check` (Quickbase "Create Job in TOA" vs. what exists in TOA) (`src/ops.js`).
-
+- **Install / M2 triage (6):** `wip_install_triage` (installs not truly complete; flags FALSE COMPLETE when Quickbase says done but no install task was submitted), `project_schedule_history` (original vs current date, reschedules, go-backs booked as Service, TOA events), `aging_stalls` (oldest stuck installs), `m2_readiness` (inspection/permit/M2 blockers and the PC who owns the next step), `battery_only_projects` (size under 1 kW, blank-market flag), `test_record_check` (Test Project flag plus name check) (`src/triage.js`). All default to Kin Home, non-test projects (`scope`: kin / other / all). Field-task history comes from the Arrivy task mirror table (`QB_TASKS_TABLE_ID`, default `bvbqgs5yc`).
 Quickbase tools only appear if `QB_USER_TOKEN` and `QB_REALM_HOSTNAME` are set.
 
 ## Kin conventions built in

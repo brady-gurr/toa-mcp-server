@@ -5,6 +5,7 @@ import { registerAllTools } from './tools.js';
 import { registerQuickbaseTools } from './quickbase.js';
 import { registerSmartQuickbaseTools } from './qbSmart.js';
 import { registerOpsTools, SERVER_INSTRUCTIONS } from './ops.js';
+import { registerTriageTools } from './triage.js';
 
 const PORT = process.env.PORT || 3000;
 
@@ -83,6 +84,7 @@ function buildServer() {
   registerAllTools(server);
   registerQuickbaseTools(server); // no-op unless QB_USER_TOKEN + QB_REALM_HOSTNAME are set
   registerOpsTools(server); // schedule, workload, stats, project 360, TOA<->QB match, sync check
+  registerTriageTools(server); // install triage, schedule history, M2 readiness, stalls, battery-only, test check
   registerSmartQuickbaseTools(server); // label-based search, project find, counts, TOA matching
   return server;
 }

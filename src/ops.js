@@ -36,6 +36,7 @@ export const SERVER_INSTRUCTIONS =
   '(Sparky is slow, so use it only when actually needed). For Quickbase schema or field-meaning questions Sparky cannot settle, suggest asking Dev and offer to draft the message. ' +
   'Never send anything to Dev or anyone else without the user saying so. ' +
   'Kin conventions: a system size of 0.00001 kW in Quickbase or TOA means a battery-only project; describe it as battery-only, never as a placeholder or missing data. ' +
+  'For install questions use wip_install_triage (not-truly-complete installs), project_schedule_history (original vs current date, rolls, go-backs), aging_stalls, m2_readiness, battery_only_projects and test_record_check; they default to Kin Home, non-test projects. ' +
   'TOA scheduling and its integrations are still being rolled out, so status or schedule gaps between Quickbase and TOA are expected for now; report them as observations, not errors.';
 
 // --- small utilities --------------------------------------------------------
